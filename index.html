@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SteepSmart — Tea Steeping Time Chart, Green Tea Temperature Timer & Gongfu Tea Timer</title>
+<meta name="description" content="SteepSmart is a free tea steeping time chart and gongfu tea timer with a 42-tea database of exact water temperatures and steep times. Track gongfu infusions, estimate caffeine per cup, and learn how long to wait after boiling for the perfect green tea temperature.">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script id="v3-steepsmart-tea-timer-lib">
+/* SteepSmart pure logic — tea steeping database (40+ teas), gongfu infusion
+ * plans, caffeine estimator, and boil-then-wait temperature helper.
+ * Pure functions only: no DOM access, no browser globals, no network.
+ * All steep times/temperatures/caffeine figures are guidance compiled from
+ * public vendor brewing instructions at build time; actual results vary by
+ * leaf grade, harvest and personal taste.
+ */
+var SteepSmart = (function () {
+  'use strict';
+
+  /* ---- Baked-in tea database (guidance / estimates) ----
+   * tempC      : recommended water temperature (°C)
+   * westernSec : suggested steep for western-style brewing
+   * gongfuSec  : suggested FIRST gongfu infusion (seconds)
+   * gongfuAdd  : extra seconds added per later infusion
+   * maxInfusions: reasonable number of quality infusions
+   * caffeineMg : estimated caffeine per 237 ml (8 oz) cup
+   * leafG100   : grams of leaf per 100 ml water (gongfu guidance)
+   * rinse      : true when a quick rinse is customary before drinking
+   */
+  var TEAS = [
+    { id: 'sencha', name: 'Sencha', cat: 'Green', origin: 'Japan', tempC: 75, westernSec: 120, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 35, leafG100: 5, rinse: false, note: 'Grassy and bright; hot water turns it bitter.' },
+    { id: 'gyokuro', name: 'Gyokuro', cat: 'Green', origin: 'Japan', tempC: 55, westernSec: 150, gongfuSec: 120, gongfuAdd: 30, maxInfusions: 3, caffeineMg: 120, leafG100: 7, rinse: false, note: 'Shade-grown; cool water is essential. High caffeine.' },
+    { id: 'longjing', name: 'Dragon Well (Longjing)', cat: 'Green', origin: 'China', tempC: 80, westernSec: 180, gongfuSec: 15, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 32, leafG100: 5, rinse: false, note: 'Chestnut-sweet; use glass to watch leaves dance.' },
+    { id: 'matcha', name: 'Matcha (Ceremonial)', cat: 'Green', origin: 'Japan', tempC: 75, westernSec: 90, gongfuSec: 90, gongfuAdd: 0, maxInfusions: 1, caffeineMg: 70, leafG100: 2, rinse: false, note: 'Whisked, not steeped — one bowl per session.' },
+    { id: 'gunpowder', name: 'Gunpowder Green', cat: 'Green', origin: 'China', tempC: 80, westernSec: 120, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 30, leafG100: 5, rinse: false, note: 'Rolled pellets open slowly; smoky and bold.' },
+    { id: 'genmaicha', name: 'Genmaicha', cat: 'Green', origin: 'Japan', tempC: 75, westernSec: 120, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 2, caffeineMg: 28, leafG100: 5, rinse: false, note: 'Toasted rice blend; comforting and nutty.' },
+    { id: 'jasmine', name: 'Jasmine Green', cat: 'Green', origin: 'China', tempC: 80, westernSec: 120, gongfuSec: 15, gongfuAdd: 10, maxInfusions: 4, caffeineMg: 30, leafG100: 5, rinse: false, note: 'Scented with jasmine; do not oversteep.' },
+    { id: 'hojicha', name: 'Hojicha', cat: 'Green', origin: 'Japan', tempC: 90, westernSec: 60, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 2, caffeineMg: 20, leafG100: 5, rinse: false, note: 'Roasted green tea; low caffeine, toasty.' },
+    { id: 'maofeng', name: 'Huangshan Mao Feng', cat: 'Green', origin: 'China', tempC: 80, westernSec: 180, gongfuSec: 20, gongfuAdd: 15, maxInfusions: 3, caffeineMg: 30, leafG100: 4, rinse: false, note: 'Delicate tippy leaves; floral and light.' },
+    { id: 'biluochun', name: 'Biluochun', cat: 'Green', origin: 'China', tempC: 80, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 32, leafG100: 5, rinse: false, note: 'Fruity and aromatic; one of China\'s famous greens.' },
+    { id: 'silver-needle', name: 'Silver Needle (Bai Hao Yin Zhen)', cat: 'White', origin: 'China', tempC: 80, westernSec: 240, gongfuSec: 30, gongfuAdd: 15, maxInfusions: 5, caffeineMg: 15, leafG100: 5, rinse: false, note: 'Buds only; honeyed and delicate.' },
+    { id: 'white-peony', name: 'White Peony (Bai Mu Dan)', cat: 'White', origin: 'China', tempC: 85, westernSec: 240, gongfuSec: 25, gongfuAdd: 15, maxInfusions: 5, caffeineMg: 25, leafG100: 5, rinse: false, note: 'Smooth and mellow; very forgiving of oversteeping.' },
+    { id: 'shou-mei', name: 'Shou Mei', cat: 'White', origin: 'China', tempC: 90, westernSec: 300, gongfuSec: 30, gongfuAdd: 15, maxInfusions: 5, caffeineMg: 28, leafG100: 5, rinse: false, note: 'Deeper white tea; dates-and-hay character.' },
+    { id: 'junshan', name: 'Junshan Yinzhen', cat: 'Yellow', origin: 'China', tempC: 80, westernSec: 240, gongfuSec: 30, gongfuAdd: 15, maxInfusions: 4, caffeineMg: 35, leafG100: 5, rinse: false, note: 'Rare yellow tea; gentle and round.' },
+    { id: 'tieguanyin', name: 'Tieguanyin (Iron Goddess)', cat: 'Oolong', origin: 'China', tempC: 95, westernSec: 180, gongfuSec: 15, gongfuAdd: 10, maxInfusions: 7, caffeineMg: 45, leafG100: 6, rinse: true, note: 'Floral and creamy; built for gongfu.' },
+    { id: 'da-hong-pao', name: 'Da Hong Pao (Big Red Robe)', cat: 'Oolong', origin: 'China', tempC: 95, westernSec: 120, gongfuSec: 10, gongfuAdd: 5, maxInfusions: 8, caffeineMg: 55, leafG100: 6, rinse: true, note: 'Wuyi rock oolong; mineral and roasted.' },
+    { id: 'oriental-beauty', name: 'Oriental Beauty', cat: 'Oolong', origin: 'Taiwan', tempC: 90, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 5, caffeineMg: 50, leafG100: 5, rinse: false, note: 'Honeyed and fruity; bug-bitten leaves.' },
+    { id: 'dancong', name: 'Phoenix Dancong (Mi Lan Xiang)', cat: 'Oolong', origin: 'China', tempC: 95, westernSec: 120, gongfuSec: 10, gongfuAdd: 5, maxInfusions: 7, caffeineMg: 55, leafG100: 6, rinse: true, note: 'Honey-orchid aroma; flash steeps.' },
+    { id: 'jin-xuan', name: 'Milk Oolong (Jin Xuan)', cat: 'Oolong', origin: 'Taiwan', tempC: 90, westernSec: 180, gongfuSec: 15, gongfuAdd: 10, maxInfusions: 6, caffeineMg: 45, leafG100: 6, rinse: true, note: 'Naturally milky and buttery.' },
+    { id: 'gaoshan', name: 'High Mountain Oolong (Gaoshan)', cat: 'Oolong', origin: 'Taiwan', tempC: 90, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 5, caffeineMg: 45, leafG100: 6, rinse: false, note: 'Alishan-style; lilac and sweet cream.' },
+    { id: 'assam', name: 'Assam', cat: 'Black', origin: 'India', tempC: 100, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 65, leafG100: 5, rinse: false, note: 'Malty breakfast classic; loves milk.' },
+    { id: 'darjeeling-ff', name: 'Darjeeling First Flush', cat: 'Black', origin: 'India', tempC: 90, westernSec: 180, gongfuSec: 25, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 50, leafG100: 5, rinse: false, note: 'Muscatel and floral; treat gently like a green.' },
+    { id: 'earl-grey', name: 'Earl Grey', cat: 'Black', origin: 'Blend', tempC: 100, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 2, caffeineMg: 60, leafG100: 5, rinse: false, note: 'Bergamot-scented; a citrus lift.' },
+    { id: 'english-breakfast', name: 'English Breakfast', cat: 'Black', origin: 'Blend', tempC: 100, westernSec: 240, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 2, caffeineMg: 65, leafG100: 5, rinse: false, note: 'Bold blend; built for milk and mornings.' },
+    { id: 'keemun', name: 'Keemun', cat: 'Black', origin: 'China', tempC: 100, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 50, leafG100: 5, rinse: false, note: 'Winey and smooth; the "burgundy of teas".' },
+    { id: 'lapsang', name: 'Lapsang Souchong', cat: 'Black', origin: 'China', tempC: 100, westernSec: 180, gongfuSec: 15, gongfuAdd: 10, maxInfusions: 4, caffeineMg: 60, leafG100: 5, rinse: false, note: 'Smoked over pine; campfire in a cup.' },
+    { id: 'golden-monkey', name: 'Golden Monkey', cat: 'Black', origin: 'China', tempC: 100, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 3, caffeineMg: 55, leafG100: 5, rinse: false, note: 'Cocoa and malt; very forgiving.' },
+    { id: 'yunnan-gold', name: 'Yunnan Golden Tips', cat: 'Black', origin: 'China', tempC: 95, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 4, caffeineMg: 55, leafG100: 5, rinse: false, note: 'Peppery-sweet; golden buds.' },
+    { id: 'ceylon', name: 'Ceylon', cat: 'Black', origin: 'Sri Lanka', tempC: 100, westernSec: 180, gongfuSec: 20, gongfuAdd: 10, maxInfusions: 2, caffeineMg: 65, leafG100: 5, rinse: false, note: 'Bright and brisk; great iced.' },
+    { id: 'masala-chai', name: 'Masala Chai', cat: 'Black', origin: 'India', tempC: 100, westernSec: 300, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 60, leafG100: 4, rinse: false, note: 'Simmer with milk and spices for full body.' },
+    { id: 'sheng-puerh', name: 'Sheng Pu-erh (Raw)', cat: 'Pu-erh', origin: 'China', tempC: 95, westernSec: 60, gongfuSec: 10, gongfuAdd: 5, maxInfusions: 10, caffeineMg: 70, leafG100: 6, rinse: true, note: 'Aged raw tea; rinse first, then many short steeps.' },
+    { id: 'shou-puerh', name: 'Shou Pu-erh (Ripe)', cat: 'Pu-erh', origin: 'China', tempC: 100, westernSec: 60, gongfuSec: 15, gongfuAdd: 5, maxInfusions: 8, caffeineMg: 65, leafG100: 6, rinse: true, note: 'Earthy and smooth; rinse first.' },
+    { id: 'chamomile', name: 'Chamomile', cat: 'Herbal', origin: 'Egypt', tempC: 100, westernSec: 300, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Apple-like and calming; caffeine-free.' },
+    { id: 'peppermint', name: 'Peppermint', cat: 'Herbal', origin: 'Blend', tempC: 100, westernSec: 240, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Cooling and digestive; caffeine-free.' },
+    { id: 'rooibos', name: 'Rooibos', cat: 'Herbal', origin: 'South Africa', tempC: 100, westernSec: 360, gongfuSec: 90, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 5, rinse: false, note: 'Red bush; vanilla-woody, caffeine-free.' },
+    { id: 'honeybush', name: 'Honeybush', cat: 'Herbal', origin: 'South Africa', tempC: 100, westernSec: 360, gongfuSec: 90, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 5, rinse: false, note: 'Honey-sweet rooibos cousin; caffeine-free.' },
+    { id: 'hibiscus', name: 'Hibiscus', cat: 'Herbal', origin: 'Blend', tempC: 100, westernSec: 300, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Tart and ruby-red; lovely iced, caffeine-free.' },
+    { id: 'lemon-ginger', name: 'Lemon Ginger', cat: 'Herbal', origin: 'Blend', tempC: 100, westernSec: 300, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Warming and zingy; caffeine-free.' },
+    { id: 'butterfly-pea', name: 'Butterfly Pea Flower', cat: 'Herbal', origin: 'Thailand', tempC: 100, westernSec: 240, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Brews blue; add lemon to turn it purple.' },
+    { id: 'yerba-mate', name: 'Yerba Mate', cat: 'Herbal', origin: 'South America', tempC: 75, westernSec: 180, gongfuSec: 30, gongfuAdd: 15, maxInfusions: 4, caffeineMg: 70, leafG100: 6, rinse: false, note: 'Not tea but energizing; keep water below 80C.' },
+    { id: 'chrysanthemum', name: 'Chrysanthemum', cat: 'Herbal', origin: 'China', tempC: 100, westernSec: 240, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 3, caffeineMg: 0, leafG100: 3, rinse: false, note: 'Floral whole buds; caffeine-free.' },
+    { id: 'lemongrass', name: 'Lemongrass', cat: 'Herbal', origin: 'Blend', tempC: 100, westernSec: 300, gongfuSec: 60, gongfuAdd: 30, maxInfusions: 2, caffeineMg: 0, leafG100: 4, rinse: false, note: 'Citrus-bright; caffeine-free.' }
+  ];
+
+  var CATEGORIES = ['Green', 'White', 'Yellow', 'Oolong', 'Black', 'Pu-erh', 'Herbal'];
+
+  function num(n, fallback) {
+    var v = Number(n);
+    return (isFinite(v) ? v : fallback);
+  }
+
+  function findTea(id) {
+    if (typeof id !== 'string') return null;
+    var key = id.trim().toLowerCase();
+    for (var i = 0; i < TEAS.length; i++) {
+      if (TEAS[i].id === key) return TEAS[i];
+    }
+    return null; // graceful: unknown ids resolve to null, caller shows a hint
+  }
+
+  function teasByCategory(cat) {
+    if (cat === 'All' || !cat) return TEAS.slice();
+    return TEAS.filter(function (t) { return t.cat === cat; });
+  }
+
+  function searchTeas(query, cat) {
+    var pool = teasByCategory(cat);
+    if (!query || !String(query).trim()) return pool;
+    var q = String(query).trim().toLowerCase();
+    return pool.filter(function (t) {
+      return t.name.toLowerCase().indexOf(q) !== -1 ||
+             t.origin.toLowerCase().indexOf(q) !== -1 ||
+             t.cat.toLowerCase().indexOf(q) !== -1;
+    });
+  }
+
+  /* ---- gongfu infusion plan ---- */
+  // Seconds for infusion n (1-based). null when n is out of range = session over.
+  function infusionSeconds(tea, n) {
+    if (!tea || typeof tea !== 'object') return null;
+    var i = Math.floor(num(n, 0));
+    if (i < 1 || i > tea.maxInfusions) return null;
+    return tea.gongfuSec + (i - 1) * tea.gongfuAdd;
+  }
+
+  function gongfuPlan(tea) {
+    if (!tea) return [];
+    var out = [];
+    for (var i = 1; i <= tea.maxInfusions; i++) {
+      out.push({ n: i, seconds: infusionSeconds(tea, i) });
+    }
+    return out;
+  }
+
+  function westernMinutes(tea) {
+    if (!tea) return null;
+    return tea.westernSec / 60;
+  }
+
+  /* ---- caffeine estimator ---- */
+  function caffeineForCup(tea, cupMl) {
+    if (!tea) return null;
+    var ml = num(cupMl, 237);
+    if (ml <= 0) return null;
+    return Math.round(tea.caffeineMg * ml / 237);
+  }
+
+  // Fraction of the first-cup caffeine that each later infusion carries
+  // (caffeine extracts quickly; later steeps carry much less).
+  var INFUSION_FRACTIONS = [1, 0.55, 0.35, 0.25, 0.18, 0.12, 0.08, 0.05, 0.03, 0.02];
+
+  function infusionCaffeineFraction(n) {
+    var i = Math.floor(num(n, 0));
+    if (i < 1) return 0;
+    if (i > INFUSION_FRACTIONS.length) return 0.01;
+    return INFUSION_FRACTIONS[i - 1];
+  }
+
+  // Estimated total caffeine across a whole gongfu session.
+  function sessionCaffeineMg(tea, infusions, cupMl) {
+    if (!tea) return null;
+    var k = Math.floor(num(infusions, 1));
+    if (k < 1) return 0;
+    var oneCup = caffeineForCup(tea, cupMl);
+    var total = 0;
+    for (var i = 1; i <= Math.min(k, 12); i++) {
+      total += oneCup * infusionCaffeineFraction(i);
+    }
+    return Math.round(total);
+  }
+
+  function caffeineLevel(mg) { // plain-English guidance label
+    var m = num(mg, 0);
+    if (m <= 0) return 'Caffeine-free';
+    if (m < 40) return 'Low';
+    if (m < 80) return 'Moderate';
+    if (m < 150) return 'High';
+    return 'Very high';
+  }
+
+  /* ---- boil-then-wait temperature helper ----
+   * Newton's law of cooling: T(t) = room + (start - room) * e^(-k*t).
+   * k per vessel (per minute), approximate averages for guidance.
+   * Returns { minutes, seconds } or 0 (already cool enough) or null
+   * when the target is below room temperature (unreachable by waiting).
+   */
+  var VESSEL_K = {
+    kettle: 0.035,    // closed-lid kettle: cools slowly
+    clay: 0.045,      // lidded clay pot (e.g. Yixing)
+    ceramic: 0.08,    // open ceramic vessel / gaiwan
+    glass: 0.10       // open glass cup: cools fastest
+  };
+
+  function boilWaitSeconds(targetC, opts) {
+    opts = opts || {};
+    var target = num(targetC, NaN);
+    if (!isFinite(target)) return null;
+    var start = num(opts.startC, 100);
+    var room = num(opts.roomC, 25);
+    var k = VESSEL_K[opts.vessel] || VESSEL_K.kettle;
+    if (target >= start) return 0;          // no waiting needed
+    if (target <= room) return null;        // cooling alone cannot reach it
+    var tMin = Math.log((start - room) / (target - room)) / k;
+    if (!isFinite(tMin) || tMin < 0) return null;
+    return Math.round(tMin * 60);
+  }
+
+  function boilWaitMinutes(targetC, opts) {
+    var s = boilWaitSeconds(targetC, opts);
+    if (s === null) return null;
+    return { minutes: Math.floor(s / 60), seconds: s % 60 };
+  }
+
+  function vesselOptions() {
+    return [
+      { id: 'kettle', label: 'Kettle (lid closed)' },
+      { id: 'clay', label: 'Lidded clay pot' },
+      { id: 'ceramic', label: 'Open ceramic / gaiwan' },
+      { id: 'glass', label: 'Open glass cup' }
+    ];
+  }
+
+  /* ---- formatting ---- */
+  function formatDuration(sec) {
+    var s = Math.max(0, Math.round(num(sec, 0)));
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return m + ':' + (r < 10 ? '0' : '') + r;
+  }
+
+  function buildLogEntry(tea, infusionNo, seconds, notes, atISO) {
+    return {
+      teaId: tea ? tea.id : null,
+      teaName: tea ? tea.name : 'Unknown tea',
+      infusion: Math.floor(num(infusionNo, 1)),
+      seconds: Math.round(num(seconds, 0)),
+      notes: typeof notes === 'string' ? notes.trim().slice(0, 200) : '',
+      at: atISO || new Date().toISOString()
+    };
+  }
+
+  return {
+    TEAS: TEAS,
+    CATEGORIES: CATEGORIES,
+    findTea: findTea,
+    teasByCategory: teasByCategory,
+    searchTeas: searchTeas,
+    infusionSeconds: infusionSeconds,
+    gongfuPlan: gongfuPlan,
+    westernMinutes: westernMinutes,
+    caffeineForCup: caffeineForCup,
+    infusionCaffeineFraction: infusionCaffeineFraction,
+    sessionCaffeineMg: sessionCaffeineMg,
+    caffeineLevel: caffeineLevel,
+    boilWaitSeconds: boilWaitSeconds,
+    boilWaitMinutes: boilWaitMinutes,
+    vesselOptions: vesselOptions,
+    formatDuration: formatDuration,
+    buildLogEntry: buildLogEntry
+  };
+})();
+
+</script>
+<style>
+  :root{
+    --bg:#0F1410; --bg2:#131A12; --card:#172016; --card2:#1B2419;
+    --sage:#A3B18A; --sage-dim:#7C8B6F; --gold:#E9C46A; --gold-deep:#C9A24A;
+    --ink:#EAEFE3; --muted:#A9B39A; --line:rgba(163,177,138,.18);
+  }
+  html{scroll-behavior:smooth}
+  body{background:var(--bg); color:var(--ink); font-family:'Inter',system-ui,sans-serif;}
+  .font-display{font-family:'Fraunces',Georgia,serif;}
+  .zen-header{
+    background:linear-gradient(180deg, rgba(20,28,19,.97) 0%, rgba(15,20,16,.96) 100%);
+    border-bottom:1px solid var(--line);
+    backdrop-filter:blur(8px);
+  }
+  .zencard{background:linear-gradient(180deg,var(--card2),var(--card)); border:1px solid var(--line); border-radius:1.25rem;
+    box-shadow:0 24px 50px -30px rgba(0,0,0,.85);}
+  .zencard-h{border-bottom:1px solid var(--line); padding:.9rem 1.25rem; font-family:'Fraunces',serif;
+    color:var(--gold); font-size:1.15rem; font-weight:600; letter-spacing:.01em;}
+  .field{background:#0C100B; border:1.5px solid rgba(163,177,138,.30); border-radius:.65rem;
+    padding:.55rem .75rem; width:100%; color:var(--ink);}
+  .field:focus{outline:2px solid var(--gold); outline-offset:1px; border-color:var(--gold);}
+  select.field option{background:#131A12;}
+  .btn-gold{background:var(--gold); color:#231D08; font-weight:700; border-radius:.8rem;
+    transition:transform .12s ease, box-shadow .12s ease, background .12s ease;}
+  .btn-gold:hover{background:#F2D383; box-shadow:0 10px 26px -10px rgba(233,196,106,.75);}
+  .btn-gold:active{transform:translateY(1px);}
+  .btn-sage{background:rgba(163,177,138,.14); border:1px solid rgba(163,177,138,.5); color:var(--sage);
+    font-weight:600; border-radius:.8rem; transition:all .12s ease;}
+  .btn-sage:hover{background:rgba(163,177,138,.25);}
+  .btn-ghost{color:var(--muted); border:1px solid var(--line); border-radius:.8rem; transition:all .12s ease;}
+  .btn-ghost:hover{color:var(--ink); border-color:var(--sage-dim);}
+  .badge-glow{background:rgba(233,196,106,.10); border:1px solid rgba(233,196,106,.5); color:var(--gold);}
+  .tea-btn{display:block; width:100%; text-align:left; padding:.6rem .8rem; border-radius:.75rem;
+    border:1px solid transparent; transition:all .12s ease;}
+  .tea-btn:hover{background:rgba(163,177,138,.10);}
+  .tea-btn.active{background:rgba(233,196,106,.12); border-color:rgba(233,196,106,.55);}
+  .chip{font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; padding:.15rem .55rem;
+    border-radius:999px; background:rgba(163,177,138,.14); color:var(--sage); font-weight:600;}
+  .chip-gold{background:rgba(233,196,106,.14); color:var(--gold);}
+  .plan-row{display:flex; justify-content:space-between; align-items:center; padding:.45rem .7rem;
+    border-radius:.6rem; border:1px solid transparent;}
+  .plan-row.done{background:rgba(163,177,138,.10); border-color:var(--line);}
+  .plan-row.now{background:rgba(233,196,106,.12); border-color:rgba(233,196,106,.6);}
+  .faq summary{cursor:pointer; font-weight:600; color:var(--ink); padding:1rem 1.25rem; list-style:none;}
+  .faq summary::-webkit-details-marker{display:none;}
+  .faq summary::after{content:"+"; float:right; color:var(--gold); font-size:1.3rem; line-height:1;}
+  .faq[open] summary::after{content:"–";}
+  .faq p{padding:0 1.25rem 1.1rem; color:var(--muted); line-height:1.7;}
+  .faq{border:1px solid var(--line); border-radius:.9rem; background:var(--bg2); margin-bottom:.75rem;}
+  .article h2{font-family:'Fraunces',serif; color:var(--gold); font-size:1.6rem; margin:2.2rem 0 .8rem; font-weight:600;}
+  .article h3{font-family:'Fraunces',serif; color:var(--sage); font-size:1.25rem; margin:1.6rem 0 .6rem; font-weight:600;}
+  .article p{color:#C6CFB8; line-height:1.85; margin-bottom:1rem;}
+  .article ul{color:#C6CFB8; line-height:1.8; margin:0 0 1rem 1.2rem; list-style:disc;}
+  .article table{width:100%; border-collapse:collapse; margin:1rem 0 1.5rem; font-size:.92rem;}
+  .article th,.article td{border:1px solid var(--line); padding:.55rem .7rem; text-align:left;}
+  .article th{background:rgba(163,177,138,.12); color:var(--gold);}
+  .article td{color:#C6CFB8;}
+  .log-entry{border-left:3px solid var(--gold); background:rgba(233,196,106,.06);
+    border-radius:0 .6rem .6rem 0; padding:.55rem .8rem; margin-bottom:.55rem;}
+  .timer-num{font-variant-numeric:tabular-nums;}
+  ::selection{background:rgba(233,196,106,.35);}
+  .scroll-thin::-webkit-scrollbar{width:8px;}
+  .scroll-thin::-webkit-scrollbar-thumb{background:rgba(163,177,138,.35); border-radius:8px;}
+  .no-print{}
+  @media print{ .no-print{display:none;} }
+</style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {"@type":"Question","name":"How long should I steep green tea?","acceptedAnswer":{"@type":"Answer","text":"Most green teas steep best for 2 to 3 minutes in western-style brewing at 75 to 80C. Sencha does well at 75C for 2 minutes, Dragon Well at 80C for 3 minutes, and delicate gyokuro at only 55C for about 2 to 3 minutes. Longer or hotter steeps pull out bitter tannins. SteepSmart's built-in tea steeping time chart gives the exact recommendation for 42 teas."}},
+    {"@type":"Question","name":"What is the right water temperature for green tea?","acceptedAnswer":{"@type":"Answer","text":"Green tea generally wants 75 to 85C, never a rolling boil. Sencha and genmaicha prefer about 75C, Dragon Well and gunpowder about 80C, hojicha up to 90C, and shade-grown gyokuro as low as 55C. SteepSmart's green tea temperature timer shows the ideal temperature for every tea and its boil-then-wait helper tells you how many minutes to let boiling water cool to reach it."}},
+    {"@type":"Question","name":"How does a gongfu tea timer work?","acceptedAnswer":{"@type":"Answer","text":"Gongfu brewing uses a small vessel and many short infusions instead of one long steep. You pick a tea, and the gongfu tea timer counts down each infusion — for example, a Tieguanyin oolong might go 15, 25, 35 seconds and so on — adding a few seconds each round. SteepSmart automatically advances the timer through up to 10 infusions and lets you log each one with flavor notes."}},
+    {"@type":"Question","name":"How many times can you reinfuse oolong tea?","acceptedAnswer":{"@type":"Answer","text":"High-quality oolongs are the champions of reinfusing. Da Hong Pao can give 8 good infusions, Tieguanyin and Phoenix Dancong about 7, and milk oolong around 6. Green teas usually fade after 3, white teas after 4 to 5, and pu-erh can go to 8 or 10. Stop when the flavor thins out — SteepSmart shows the expected infusion count for each tea so you know what to aim for."}},
+    {"@type":"Question","name":"How much caffeine is in a cup of tea?","acceptedAnswer":{"@type":"Answer","text":"A standard 8 oz cup ranges from zero in herbal tisanes to about 120 mg in gyokuro. Typical green teas carry 25 to 40 mg, oolongs 45 to 55 mg, and black teas 50 to 70 mg — roughly half a cup of coffee. SteepSmart estimates caffeine for your cup size and, in gongfu mode, totals it across the whole session, since later infusions carry progressively less caffeine."}},
+    {"@type":"Question","name":"How accurate is SteepSmart's steeping database?","acceptedAnswer":{"@type":"Answer","text":"The database is compiled from public brewing guidance published by tea vendors and tea educators, and is clearly labeled as guidance rather than lab data. Real results vary with leaf grade, harvest, water mineral content and personal taste, so treat the times and temperatures as a reliable starting point and adjust to your palate — or log your own variations in the infusion notes."}}
+  ]
+}
+</script>
+</head>
+<body id="top" class="antialiased">
+
+<!-- ============ STICKY HEADER ============ -->
+<header class="sticky top-0 z-50 zen-header shadow-lg">
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 h-16 flex items-center justify-between">
+    <a href="#top" class="flex items-center gap-2.5">
+      <svg width="34" height="34" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <circle cx="20" cy="20" r="16.5" stroke="#E9C46A" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="96 8" transform="rotate(-45 20 20)"/>
+        <path d="M13 19h11v3.5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V19z" stroke="#A3B18A" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M24 20.5h1.8a2.6 2.6 0 0 1 0 5.2H24" stroke="#A3B18A" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M16.5 13.5c0-1.5 1.2-1.8 1.2-3M20 13.5c0-1.5 1.2-1.8 1.2-3" stroke="#E9C46A" stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+      <span class="font-display text-2xl font-bold tracking-tight" style="color:var(--ink)">SteepSmart</span>
+    </a>
+    <nav class="flex items-center gap-5 text-sm font-medium" style="color:var(--muted)">
+      <a href="#top" class="hover:text-[#E9C46A] transition">Home</a>
+      <a href="https://fixoraa.tech" class="hover:text-[#E9C46A] transition">More Tools</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ============ TOP AD ============ -->
+<div class="no-print mx-auto max-w-6xl px-4 sm:px-6 pt-4" role="complementary" aria-label="Advertisement">
+  <div class="mx-auto text-center" style="max-width:728px">
+    <span class="block text-[10px] tracking-[0.18em] uppercase text-slate-400 mb-1.5">Advertisement</span>
+    <div class="flex justify-center overflow-hidden">
+      <div class="origin-top scale-[0.44] sm:scale-100 shrink-0">
+        <script>
+          atOptions = { 'key' : '4e68ac77881c17fe128a46565d9a4e8c', 'format' : 'iframe', 'height' : 90, 'width' : 728, 'params' : {} };
+        </script>
+        <script src="https://www.highrevenueformat.com/4e68ac77881c17fe128a46565d9a4e8c/invoke.js"></script>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ HERO ============ -->
+<section class="mx-auto max-w-6xl px-4 sm:px-6 pt-8 pb-2 text-center">
+  <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden="true" class="mx-auto mb-3 opacity-90">
+    <circle cx="36" cy="36" r="30" stroke="#E9C46A" stroke-width="3" stroke-linecap="round" stroke-dasharray="175 14" transform="rotate(-50 36 36)"/>
+    <circle cx="36" cy="36" r="22" stroke="#A3B18A" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="130 9" transform="rotate(20 36 36)" opacity=".6"/>
+    <path d="M28 33h13v4.5a6.5 6.5 0 0 1-6.5 6.5h-.5A6 6 0 0 1 28 38v-5z" stroke="#E9C46A" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M41 35h2.2a3.2 3.2 0 0 1 0 6.4H41" stroke="#E9C46A" stroke-width="2.4" stroke-linecap="round"/>
+    <path d="M32 26.5c0-2 1.5-2.2 1.5-4M37 26.5c0-2 1.5-2.2 1.5-4" stroke="#A3B18A" stroke-width="2" stroke-linecap="round"/>
+  </svg>
+  <h1 class="font-display text-4xl sm:text-5xl font-bold leading-tight" style="color:var(--ink)">Steep every leaf<br><span class="italic" style="color:var(--gold)">at its perfect moment.</span></h1>
+  <p class="mt-4 max-w-2xl mx-auto" style="color:var(--muted)">Pick from 42 teas with exact water temperatures and steep times. Brew western-style or track every gongfu infusion with a guided countdown, flavor notes, caffeine estimates and a boil-then-wait temperature helper.</p>
+  <div class="mt-5 inline-flex items-center gap-2 badge-glow rounded-full px-4 py-1.5 text-sm font-semibold">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Unlimited Free Usage
+  </div>
+</section>
+
+<!-- ============ TOOL ============ -->
+<main class="mx-auto max-w-6xl px-4 sm:px-6 py-8">
+  <div class="grid gap-6 lg:grid-cols-12">
+
+    <!-- ===== 1. TEA PICKER ===== -->
+    <section class="zencard lg:col-span-4 overflow-hidden" aria-label="Tea picker">
+      <div class="zencard-h">Choose your tea</div>
+      <div class="p-4 space-y-3">
+        <input id="ss-tea-search" type="text" class="field" placeholder="Search 42 teas… (sencha, oolong, japan)" autocomplete="off">
+        <select id="ss-category" class="field" aria-label="Filter by category">
+          <option value="All">All categories</option>
+          <option value="Green">Green</option>
+          <option value="White">White</option>
+          <option value="Yellow">Yellow</option>
+          <option value="Oolong">Oolong</option>
+          <option value="Black">Black</option>
+          <option value="Pu-erh">Pu-erh</option>
+          <option value="Herbal">Herbal</option>
+        </select>
+        <div id="ss-tea-grid" class="scroll-thin max-h-[430px] overflow-y-auto space-y-1 pr-1" role="listbox" aria-label="Tea list"></div>
+      </div>
+    </section>
+
+    <!-- ===== 2. TIMER ===== -->
+    <section class="zencard lg:col-span-4 overflow-hidden" aria-label="Tea timer">
+      <div class="zencard-h">Brew timer</div>
+      <div class="p-5">
+        <div class="text-center">
+          <div id="ss-tea-name" class="font-display text-2xl font-semibold" style="color:var(--ink)">Sencha</div>
+          <div id="ss-temp-display" class="mt-1 text-sm font-medium" style="color:var(--gold)">75°C · 2 min western</div>
+          <p id="ss-tea-note" class="mt-2 text-xs leading-relaxed" style="color:var(--muted)"></p>
+        </div>
+
+        <div class="flex items-center justify-center gap-2 mt-4">
+          <span class="text-xs font-semibold uppercase tracking-wider" style="color:var(--muted)">Brew mode</span>
+          <select id="ss-brew-mode" class="field !w-auto text-sm" aria-label="Brew mode">
+            <option value="gongfu">Gongfu (multi-infusion)</option>
+            <option value="western">Western (single steep)</option>
+          </select>
+        </div>
+
+        <!-- countdown ring -->
+        <div class="relative w-56 h-56 mx-auto mt-5">
+          <svg viewBox="0 0 200 200" class="w-full h-full -rotate-90">
+            <circle cx="100" cy="100" r="88" fill="none" stroke="rgba(163,177,138,.15)" stroke-width="12"/>
+            <circle id="ss-ring" cx="100" cy="100" r="88" fill="none" stroke="#E9C46A" stroke-width="12"
+              stroke-linecap="round" stroke-dasharray="553" stroke-dashoffset="0"/>
+          </svg>
+          <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <div id="ss-timer-display" class="timer-num font-display text-5xl font-bold" style="color:var(--ink)">0:20</div>
+            <div id="ss-infusion-label" class="mt-1 text-xs font-semibold uppercase tracking-widest" style="color:var(--sage)">Infusion 1 of 3</div>
+          </div>
+        </div>
+
+        <div class="flex justify-center gap-3 mt-5">
+          <button id="ss-start" class="btn-gold px-7 py-2.5 text-sm">Start</button>
+          <button id="ss-pause" class="btn-sage px-5 py-2.5 text-sm" disabled>Pause</button>
+          <button id="ss-reset" class="btn-ghost px-5 py-2.5 text-sm">Reset</button>
+        </div>
+
+        <!-- log infusion with notes -->
+        <div class="mt-5 pt-4" style="border-top:1px solid var(--line)">
+          <label for="ss-note" class="text-xs font-semibold uppercase tracking-wider" style="color:var(--muted)">Flavor notes for this infusion</label>
+          <input id="ss-note" type="text" class="field mt-2" maxlength="200" placeholder="e.g. honey, orchid, sweet finish…">
+          <button id="ss-log-btn" class="btn-sage w-full mt-3 px-4 py-2.5 text-sm">Log infusion &amp; advance</button>
+          <p class="mt-2 text-[11px] leading-relaxed" style="color:var(--muted)">Log each finished infusion to build a tasting record. The timer auto-advances through the tea's full infusion plan.</p>
+        </div>
+
+        <!-- infusion plan -->
+        <div class="mt-4">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-2" style="color:var(--muted)">Infusion plan</div>
+          <div id="ss-steep-plan" class="space-y-1"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 3. GUIDES ===== -->
+    <div class="lg:col-span-4 space-y-6">
+
+      <!-- caffeine -->
+      <section class="zencard overflow-hidden" aria-label="Caffeine estimator">
+        <div class="zencard-h">Caffeine estimator</div>
+        <div class="p-5">
+          <label for="ss-cup-size" class="text-xs font-semibold uppercase tracking-wider" style="color:var(--muted)">Cup size</label>
+          <select id="ss-cup-size" class="field mt-2" aria-label="Cup size">
+            <option value="118">Small cup — 118 ml (4 oz)</option>
+            <option value="177">Tasting cup — 177 ml (6 oz)</option>
+            <option value="237" selected>Standard mug — 237 ml (8 oz)</option>
+            <option value="355">Large mug — 355 ml (12 oz)</option>
+          </select>
+          <div id="ss-caffeine-out" class="mt-4 text-sm leading-relaxed" style="color:var(--ink)"></div>
+          <p class="mt-3 text-[11px] leading-relaxed" style="color:var(--muted)">Estimates compiled from vendor data. In gongfu mode the total spans the whole session — later infusions carry less caffeine.</p>
+        </div>
+      </section>
+
+      <!-- boil wait -->
+      <section class="zencard overflow-hidden" aria-label="Boil then wait helper">
+        <div class="zencard-h">Boil-then-wait helper</div>
+        <div class="p-5">
+          <p class="text-sm mb-3" style="color:var(--muted)">Boiled your kettle? Enter your target temperature and vessel — get roughly how long to wait before pouring.</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="ss-wait-target" class="text-xs font-semibold uppercase tracking-wider" style="color:var(--muted)">Target °C</label>
+              <input id="ss-wait-target" type="number" class="field mt-2" value="80" min="26" max="99" step="1">
+            </div>
+            <div>
+              <label for="ss-wait-vessel" class="text-xs font-semibold uppercase tracking-wider" style="color:var(--muted)">Vessel</label>
+              <select id="ss-wait-vessel" class="field mt-2" aria-label="Vessel">
+                <option value="kettle">Kettle (lid closed)</option>
+                <option value="clay">Lidded clay pot</option>
+                <option value="ceramic">Open ceramic / gaiwan</option>
+                <option value="glass">Open glass cup</option>
+              </select>
+            </div>
+          </div>
+          <button id="ss-wait-btn" class="btn-gold w-full mt-3 px-4 py-2.5 text-sm">How long should I wait?</button>
+          <div id="ss-wait-out" class="mt-4 text-sm font-medium" style="color:var(--gold)" aria-live="polite"></div>
+          <p class="mt-2 text-[11px] leading-relaxed" style="color:var(--muted)">Cooling estimate (Newton's law), assumes 100°C start and 25°C room. An open cup cools much faster than a closed kettle.</p>
+        </div>
+      </section>
+
+      <!-- session log -->
+      <section class="zencard overflow-hidden" aria-label="Session log">
+        <div class="zencard-h flex items-center justify-between">
+          <span>Session log</span>
+          <button id="ss-clear-log" class="text-xs font-semibold" style="color:var(--muted)">Clear</button>
+        </div>
+        <div class="p-5">
+          <div id="ss-log-list" class="scroll-thin max-h-[300px] overflow-y-auto pr-1"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</main>
+
+<!-- ============ BOTTOM AD ============ -->
+<div class="no-print mx-auto max-w-6xl px-4 sm:px-6 pb-4" role="complementary" aria-label="Advertisement">
+  <div class="mx-auto text-center" style="max-width:728px">
+    <span class="block text-[10px] tracking-[0.18em] uppercase text-slate-400 mb-1.5">Advertisement</span>
+    <div class="flex justify-center overflow-hidden">
+      <script async src="https://js.wpadmngr.com/static/adManager.js" data-admpid="464498"></script>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SEO ARTICLE ============ -->
+<article class="article mx-auto max-w-4xl px-4 sm:px-6 py-10">
+  <h2>The complete guide to tea steeping times and temperatures</h2>
+  <p>Two variables decide whether your cup tastes like a revelation or a regret: water temperature and steep time. Get them right and even an everyday green tea turns silky, floral and sweet. Get them wrong and the same leaves taste harsh, flat or stubbornly bitter. This guide explains exactly why these two numbers matter so much, gives you a practical <strong>tea steeping time chart</strong> for every major category, and shows how a <strong>gongfu tea timer</strong> and a <strong>green tea temperature timer</strong> can take the guesswork out of every brew.</p>
+  <p>All steeping data on this page is baked into SteepSmart as guidance compiled from public brewing instructions published by tea vendors and educators. Treat the numbers as reliable starting points — leaf grade, harvest season, water mineral content and your own palate all nudge the ideal values a little. The built-in timer, infusion tracker and temperature helper above turn those starting points into repeatable, delicious cups.</p>
+
+  <h2>Why temperature and time matter more than the tea itself</h2>
+  <p>Tea leaves contain hundreds of compounds, but three families dominate flavor: caffeine (bitter and stimulating), catechins and polyphenols (bitter and astringent), and amino acids such as L-theanine (sweet, savory and relaxing). These compounds dissolve at different rates and at different temperatures. Hot water yanks caffeine and catechins out of the leaf quickly, which is why a delicate green tea steeped in boiling water for five minutes tastes punishingly bitter. Cooler water extracts amino acids more favorably relative to bitter compounds, which is why the same green tea steeped at 75°C for two minutes tastes sweet and brothy instead.</p>
+  <p>Time works the same way. A short infusion captures the most soluble, most aromatic compounds first — the florals, the sweetness, the brightness. As the steep stretches on, heavier bitter compounds keep dissolving while the delicate ones stop contributing much. That is the entire logic of gongfu brewing: many short steeps, each one capturing a different slice of the leaf's character, instead of one long steep that blurs everything into bitterness.</p>
+
+  <h2>Western brewing vs gongfu brewing</h2>
+  <p>Western-style brewing is what most of the world does every day: a few grams of leaf in a large teapot or mug, one long steep of two to five minutes, then the whole cup is drunk at once. It is simple, forgiving and perfect for breakfast black teas and herbal tisanes. A <strong>green tea temperature timer</strong> matters enormously here, because you cannot fix an over-extracted western brew — there is no second chance.</p>
+  <p>Gongfu brewing is the Chinese method of making tea: a high ratio of leaf to water in a small gaiwan or clay pot, with many short infusions that lengthen as the session goes on. A floral Tieguanyin oolong might run 15 seconds, then 25, then 35, building across six or seven rounds. A <strong>gongfu tea timer</strong> is almost essential for this style, because the differences between a 10-second and a 25-second steep are dramatic, and keeping track of which infusion you are on — while also jotting flavor notes — is genuinely hard without help. SteepSmart's timer advances through each tea's full infusion plan automatically and lets you log every round with tasting notes saved in your browser.</p>
+
+  <h2>Tea steeping time chart: temperature and time by category</h2>
+  <p>Below is a practical tea steeping time chart summarizing the database baked into SteepSmart. Temperatures are in Celsius; western times are single steeps, gongfu times are the recommended first infusion (each later infusion runs a few seconds longer).</p>
+  <table>
+    <thead><tr><th>Category</th><th>Water temp</th><th>Western steep</th><th>Gongfu 1st infusion</th><th>Typical infusions</th></tr></thead>
+    <tbody>
+      <tr><td>Green (sencha, Dragon Well, gunpowder)</td><td>75–80°C</td><td>2–3 min</td><td>15–20 sec</td><td>2–3</td></tr>
+      <tr><td>Green, delicate (gyokuro)</td><td>50–60°C</td><td>2–3 min</td><td>2 min</td><td>2–3</td></tr>
+      <tr><td>White (Silver Needle, White Peony)</td><td>80–85°C</td><td>4–5 min</td><td>25–30 sec</td><td>4–5</td></tr>
+      <tr><td>Yellow (Junshan Yinzhen)</td><td>80°C</td><td>4 min</td><td>30 sec</td><td>4</td></tr>
+      <tr><td>Oolong, green (Tieguanyin, milk oolong)</td><td>90–95°C</td><td>2–3 min</td><td>15–20 sec</td><td>5–7</td></tr>
+      <tr><td>Oolong, roasted (Da Hong Pao, Dancong)</td><td>95°C</td><td>2 min</td><td>10 sec</td><td>7–8</td></tr>
+      <tr><td>Black (Assam, Ceylon, Earl Grey)</td><td>100°C</td><td>3–4 min</td><td>20 sec</td><td>2–3</td></tr>
+      <tr><td>Black, delicate (Darjeeling first flush)</td><td>90°C</td><td>3 min</td><td>25 sec</td><td>3</td></tr>
+      <tr><td>Pu-erh (sheng and shou)</td><td>95–100°C</td><td>1 min (after rinse)</td><td>10–15 sec</td><td>8–10</td></tr>
+      <tr><td>Herbal (chamomile, rooibos, hibiscus)</td><td>100°C</td><td>4–6 min</td><td>60–90 sec</td><td>2</td></tr>
+      <tr><td>Yerba mate</td><td>75°C</td><td>3 min</td><td>30 sec</td><td>4</td></tr>
+    </tbody>
+  </table>
+  <p>A few patterns stand out. Delicate, minimally oxidized teas — greens, whites, yellows — want cooler water and reward patience over heat. Heavily oxidized or roasted teas — blacks, dark oolongs, pu-erh — want full-boiling water to coax out their depth. And the teas that give the most infusions are the tightly rolled oolongs and compressed pu-erhs, whose leaves physically need several rounds to fully open.</p>
+
+  <h3>Green tea temperature timer: the numbers that matter most</h3>
+  <p>If there is one category where a <strong>green tea temperature timer</strong> earns its place, it is green tea. The difference between 75°C and 100°C is the difference between sweet and scorched. Sencha peaks around 75°C for two minutes. Dragon Well and gunpowder prefer 80°C. Hojicha, being roasted, tolerates 90°C for a short one-minute steep. And gyokuro — the shade-grown luxury green — demands water as cool as 55°C, barely warm to the touch, for a two-to-three-minute steep that yields a thick, umami-rich liquor.</p>
+  <p>Most people do not own a variable-temperature kettle, which is exactly why SteepSmart includes the boil-then-wait helper. Boil your kettle, enter your target — say 80°C for Dragon Well — pick your vessel, and the tool estimates how many minutes to let the water cool. As a rule of thumb, water in a closed kettle drops from 100°C to about 90°C in four to five minutes, and to 80°C in eight to nine; an open glass cup gets there roughly twice as fast. The helper models this properly with Newton's law of cooling so you get a number tuned to your actual vessel.</p>
+
+  <h2>How to run a gongfu session with the timer</h2>
+  <p>A first gongfu session can feel intimidating, but the rhythm is simple once a timer handles the counting. Warm your gaiwan or small teapot with hot water and discard it. Add leaf — roughly 5 to 7 grams per 100 ml for oolongs and pu-erh, a little less for greens. If the tea calls for it (pu-erh and many oolongs do), do a quick 5-second rinse and discard it; this wakes the leaves up rather than being the first drinkable steep.</p>
+  <p>Then start the first infusion on the timer. Pour water, start the countdown, and decant every drop into a pitcher or cup when the seconds run out — leaving water on the leaves is the most common beginner mistake, because the steep keeps going. Taste, jot a note in the infusion log, and hit the log button: the timer automatically advances to the next infusion with its slightly longer countdown. Repeat until the flavor thins out, which is your honest signal that the session is over.</p>
+  <p>One more tip: keep your notes short but specific. "Honey, orchid, sweet finish" is more useful than "good." Over a few sessions you will start to see your own palate's patterns — which infusions you love, which teas deserve reordering — and that is where the saved log becomes genuinely valuable.</p>
+
+  <h2>Caffeine: what to expect per cup</h2>
+  <p>Tea's caffeine range is wide. Herbal tisanes — chamomile, peppermint, rooibos, hibiscus — contain essentially none. Green teas sit around 25 to 40 mg per 8 oz cup, though gyokuro can reach 120 mg because of its shade-grown intensity. Oolongs land at 45 to 55 mg, black teas at 50 to 70 mg, and pu-erh around 65 to 70 mg. For comparison, a typical cup of coffee carries about 95 mg, so most teas are gentler but not negligible.</p>
+  <p>In gongfu brewing the caffeine picture changes across the session: the first infusion extracts the most caffeine, and each later round carries progressively less. SteepSmart's estimator models this decay and totals your whole session, so a seven-infusion oolong session lands far below seven times the first cup's caffeine. If you are caffeine-sensitive, favor white teas, hojicha and herbals later in the day, and check the per-cup estimate before you brew.</p>
+
+  <h2>Common mistakes (and easy fixes)</h2>
+  <ul>
+    <li><strong>Boiling water on green tea.</strong> The single most common error. Use the temperature helper or let the kettle rest — greens want 75–85°C.</li>
+    <li><strong>Leaving the leaves in.</strong> In western brewing, remove or decant at the timer's end. In gongfu, decant completely every round.</li>
+    <li><strong>Too little leaf in gongfu.</strong> Gongfu needs a generous leaf ratio; skimping gives thin, boring infusions no timer can fix.</li>
+    <li><strong>Judging all infusions by the first.</strong> The second and third steeps are often the sweetest. Give the session its full arc before deciding.</li>
+    <li><strong>Skipping the rinse.</strong> For pu-erh and roasted oolongs, a quick rinse dramatically improves the first drinkable infusion.</li>
+  </ul>
+
+  <h2>Water, storage and the details that add up</h2>
+  <p>Great timing cannot rescue bad water. Heavily chlorinated tap water mutes delicate teas; a simple carbon filter is the cheapest upgrade in tea. Store tea airtight, cool and dark — green teas fade fastest and are best within months of harvest, while pu-erh and some oolongs age gracefully. And preheating your vessel matters more than people think: pouring 80°C water into a cold ceramic pot can drop the actual steeping temperature by several degrees, so a quick hot-water rinse of the empty pot keeps your carefully timed temperature honest.</p>
+  <p>Ultimately, brewing great tea is a practice, not a formula. Use SteepSmart's tea steeping time chart as your starting line, let the gongfu tea timer keep your rhythm, check the green tea temperature timer before you pour, and keep notes. Within a few sessions you will stop needing the chart for your favorites — but you will keep reaching for the timer, because some pleasures are worth measuring precisely.</p>
+</article>
+
+<!-- ============ FAQS ============ -->
+<section class="mx-auto max-w-4xl px-4 sm:px-6 pb-14">
+  <h2 class="font-display text-3xl font-semibold mb-6 text-center" style="color:var(--gold)">Frequently asked questions</h2>
+
+  <details class="faq">
+    <summary>How long should I steep green tea?</summary>
+    <p>Most green teas steep best for 2 to 3 minutes in western-style brewing at 75 to 80°C. Sencha does well at 75°C for 2 minutes, Dragon Well at 80°C for 3 minutes, and delicate gyokuro at only 55°C for about 2 to 3 minutes. Longer or hotter steeps pull out bitter tannins. SteepSmart's built-in tea steeping time chart gives the exact recommendation for 42 teas.</p>
+  </details>
+
+  <details class="faq">
+    <summary>What is the right water temperature for green tea?</summary>
+    <p>Green tea generally wants 75 to 85°C, never a rolling boil. Sencha and genmaicha prefer about 75°C, Dragon Well and gunpowder about 80°C, hojicha up to 90°C, and shade-grown gyokuro as low as 55°C. SteepSmart's green tea temperature timer shows the ideal temperature for every tea and its boil-then-wait helper tells you how many minutes to let boiling water cool to reach it.</p>
+  </details>
+
+  <details class="faq">
+    <summary>How does a gongfu tea timer work?</summary>
+    <p>Gongfu brewing uses a small vessel and many short infusions instead of one long steep. You pick a tea, and the gongfu tea timer counts down each infusion — for example, a Tieguanyin oolong might go 15, 25, 35 seconds and so on — adding a few seconds each round. SteepSmart automatically advances the timer through up to 10 infusions and lets you log each one with flavor notes.</p>
+  </details>
+
+  <details class="faq">
+    <summary>How many times can you reinfuse oolong tea?</summary>
+    <p>High-quality oolongs are the champions of reinfusing. Da Hong Pao can give 8 good infusions, Tieguanyin and Phoenix Dancong about 7, and milk oolong around 6. Green teas usually fade after 3, white teas after 4 to 5, and pu-erh can go to 8 or 10. Stop when the flavor thins out — SteepSmart shows the expected infusion count for each tea so you know what to aim for.</p>
+  </details>
+
+  <details class="faq">
+    <summary>How much caffeine is in a cup of tea?</summary>
+    <p>A standard 8 oz cup ranges from zero in herbal tisanes to about 120 mg in gyokuro. Typical green teas carry 25 to 40 mg, oolongs 45 to 55 mg, and black teas 50 to 70 mg — roughly half a cup of coffee. SteepSmart estimates caffeine for your cup size and, in gongfu mode, totals it across the whole session, since later infusions carry progressively less caffeine.</p>
+  </details>
+
+  <details class="faq">
+    <summary>How accurate is SteepSmart's steeping database?</summary>
+    <p>The database is compiled from public brewing guidance published by tea vendors and tea educators, and is clearly labeled as guidance rather than lab data. Real results vary with leaf grade, harvest, water mineral content and personal taste, so treat the times and temperatures as a reliable starting point and adjust to your palate — or log your own variations in the infusion notes.</p>
+  </details>
+</section>
+
+<footer class="border-t" style="border-color:var(--line)">
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <svg width="24" height="24" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <circle cx="20" cy="20" r="16.5" stroke="#E9C46A" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="96 8" transform="rotate(-45 20 20)"/>
+        <path d="M13 19h11v3.5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V19z" stroke="#A3B18A" stroke-width="2.2" stroke-linejoin="round"/>
+      </svg>
+      <span class="font-display font-semibold" style="color:var(--ink)">SteepSmart</span>
+    </div>
+    <p class="text-xs text-center" style="color:var(--muted)">Free tea steeping timer &amp; gongfu infusion tracker. Brewing data is guidance — adjust to taste.</p>
+    <nav class="flex items-center gap-5 text-sm font-medium" style="color:var(--muted)">
+      <a href="#top" class="hover:text-[#E9C46A] transition">Back to timer</a>
+    </nav>
+  </div>
+</footer>
+
+<!-- ============ TOOL WIRING (non-lib UI logic) ============ -->
+<script>
+(function () {
+  'use strict';
+  var L = SteepSmart; // pure logic namespace from the lib block
+  var LOG_KEY = 'steepsmart-log-v1';
+  var RING_C = 553; // 2πr for r=88
+
+  function $(id) { return document.getElementById(id); }
+  var els = {
+    search: $('ss-tea-search'), category: $('ss-category'), grid: $('ss-tea-grid'),
+    name: $('ss-tea-name'), temp: $('ss-temp-display'), note: $('ss-tea-note'),
+    mode: $('ss-brew-mode'), plan: $('ss-steep-plan'),
+    display: $('ss-timer-display'), ring: $('ss-ring'), label: $('ss-infusion-label'),
+    start: $('ss-start'), pause: $('ss-pause'), reset: $('ss-reset'),
+    noteInput: $('ss-note'), logBtn: $('ss-log-btn'),
+    logList: $('ss-log-list'), clearLog: $('ss-clear-log'),
+    cup: $('ss-cup-size'), caffeineOut: $('ss-caffeine-out'),
+    waitTarget: $('ss-wait-target'), waitVessel: $('ss-wait-vessel'),
+    waitBtn: $('ss-wait-btn'), waitOut: $('ss-wait-out')
+  };
+
+  var state = {
+    teaId: 'sencha', mode: 'gongfu', infusion: 1,
+    total: 20, remaining: 20, running: false, endAt: 0, timerId: null, rinseNeeded: false
+  };
+
+  /* ---------- tea selection ---------- */
+  function currentTea() { return L.findTea(state.teaId) || L.TEAS[0]; }
+
+  function steepSecondsFor(tea) {
+    if (state.mode === 'western') return tea.westernSec;
+    var s = L.infusionSeconds(tea, state.infusion);
+    return s === null ? 0 : s;
+  }
+
+  function selectTea(id) {
+    state.teaId = id;
+    state.infusion = 1;
+    stopTimer();
+    var tea = currentTea();
+    state.rinseNeeded = tea.rinse && state.mode === 'gongfu';
+    state.total = state.remaining = steepSecondsFor(tea);
+    renderTeaInfo(); renderPlan(); renderCaffeine(); renderTimer(); renderGrid();
+  }
+
+  function renderTeaInfo() {
+    var tea = currentTea();
+    els.name.textContent = tea.name;
+    els.temp.textContent = tea.tempC + '°C · ' + (state.mode === 'western'
+      ? L.westernMinutes(tea) + ' min western'
+      : 'up to ' + tea.maxInfusions + ' gongfu infusions');
+    els.note.textContent = (tea.rinse && state.mode === 'gongfu' ? 'Rinse first (5 sec, discard). ' : '') + tea.note +
+      ' Guidance compiled from public vendor instructions — adjust to taste.';
+  }
+
+  function renderGrid() {
+    var teas = L.searchTeas(els.search.value, els.category.value);
+    els.grid.innerHTML = '';
+    if (!teas.length) {
+      var p = document.createElement('p');
+      p.className = 'text-sm px-2 py-4'; p.style.color = 'var(--muted)';
+      p.textContent = 'No teas match. Try a different search.';
+      els.grid.appendChild(p); return;
+    }
+    teas.forEach(function (tea) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tea-btn' + (tea.id === state.teaId ? ' active' : '');
+      b.setAttribute('role', 'option');
+      b.setAttribute('aria-selected', tea.id === state.teaId ? 'true' : 'false');
+      var top = document.createElement('div');
+      top.className = 'flex items-center justify-between gap-2';
+      var nm = document.createElement('span');
+      nm.className = 'font-semibold text-sm'; nm.style.color = 'var(--ink)';
+      nm.textContent = tea.name;
+      var tp = document.createElement('span');
+      tp.className = 'text-xs font-medium timer-num'; tp.style.color = 'var(--gold)';
+      tp.textContent = tea.tempC + '°C';
+      top.appendChild(nm); top.appendChild(tp);
+      var meta = document.createElement('div');
+      meta.className = 'flex items-center gap-2 mt-1';
+      var c = document.createElement('span'); c.className = 'chip'; c.textContent = tea.cat;
+      var o = document.createElement('span'); o.className = 'text-xs'; o.style.color = 'var(--muted)';
+      o.textContent = tea.origin + ' · ' + tea.maxInfusions + ' inf.';
+      meta.appendChild(c); meta.appendChild(o);
+      b.appendChild(top); b.appendChild(meta);
+      b.addEventListener('click', function () { selectTea(tea.id); });
+      els.grid.appendChild(b);
+    });
+  }
+
+  /* ---------- infusion plan ---------- */
+  function renderPlan() {
+    var tea = currentTea();
+    els.plan.innerHTML = '';
+    if (state.mode === 'western') {
+      var w = document.createElement('div'); w.className = 'plan-row now';
+      w.innerHTML = '';
+      var wl = document.createElement('span'); wl.className = 'text-sm font-semibold'; wl.textContent = 'Single steep';
+      var wt = document.createElement('span'); wt.className = 'text-sm timer-num font-semibold'; wt.style.color = 'var(--gold)';
+      wt.textContent = L.formatDuration(tea.westernSec);
+      w.appendChild(wl); w.appendChild(wt); els.plan.appendChild(w);
+      return;
+    }
+    L.gongfuPlan(tea).forEach(function (row) {
+      var d = document.createElement('div');
+      d.className = 'plan-row' + (row.n < state.infusion ? ' done' : row.n === state.infusion ? ' now' : '');
+      var l = document.createElement('span'); l.className = 'text-sm';
+      l.textContent = (row.n < state.infusion ? '✓ ' : '') + 'Infusion ' + row.n;
+      var t = document.createElement('span'); t.className = 'text-sm timer-num font-semibold';
+      t.style.color = row.n === state.infusion ? 'var(--gold)' : 'var(--muted)';
+      t.textContent = L.formatDuration(row.seconds);
+      d.appendChild(l); d.appendChild(t); els.plan.appendChild(d);
+    });
+  }
+
+  /* ---------- timer ---------- */
+  function renderTimer() {
+    els.display.textContent = L.formatDuration(state.remaining);
+    var frac = state.total > 0 ? state.remaining / state.total : 0;
+    els.ring.setAttribute('stroke-dashoffset', String(RING_C * (1 - frac)));
+    var tea = currentTea();
+    els.label.textContent = state.mode === 'western'
+      ? 'Western steep'
+      : 'Infusion ' + state.infusion + ' of ' + tea.maxInfusions;
+    els.pause.disabled = !state.running;
+    els.start.textContent = state.running ? 'Resume' : (state.remaining < state.total ? 'Resume' : 'Start');
+  }
+
+  function stopTimer() {
+    state.running = false;
+    if (state.timerId) { clearInterval(state.timerId); state.timerId = null; }
+  }
+
+  function tick() {
+    var left = Math.max(0, Math.ceil((state.endAt - Date.now()) / 1000));
+    state.remaining = left;
+    if (left <= 0) {
+      stopTimer();
+      beep();
+      var tea = currentTea();
+      if (state.mode === 'gongfu' && state.infusion >= tea.maxInfusions) {
+        els.label.textContent = 'Session complete — enjoy!';
+      } else {
+        els.label.textContent = 'Done! Log it, then advance.';
+      }
+    }
+    renderTimer();
+  }
+
+  function beep() {
+    try {
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880; o.type = 'sine';
+      g.gain.setValueAtTime(0.001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.9);
+      o.start(); o.stop(ctx.currentTime + 1);
+    } catch (e) { /* audio unavailable */ }
+  }
+
+  els.start.addEventListener('click', function () {
+    if (state.running) return;
+    if (state.remaining <= 0) {
+      // restart finished infusion
+      var tea = currentTea();
+      state.total = state.remaining = steepSecondsFor(tea);
+    }
+    state.running = true;
+    state.endAt = Date.now() + state.remaining * 1000;
+    state.timerId = setInterval(tick, 200);
+    renderTimer();
+  });
+  els.pause.addEventListener('click', function () {
+    if (!state.running) return;
+    stopTimer();
+    renderTimer();
+  });
+  els.reset.addEventListener('click', function () {
+    stopTimer();
+    var tea = currentTea();
+    state.total = state.remaining = steepSecondsFor(tea);
+    renderTimer();
+  });
+  els.mode.addEventListener('change', function () {
+    state.mode = els.mode.value;
+    state.infusion = 1;
+    stopTimer();
+    var tea = currentTea();
+    state.rinseNeeded = tea.rinse && state.mode === 'gongfu';
+    state.total = state.remaining = steepSecondsFor(tea);
+    renderTeaInfo(); renderPlan(); renderCaffeine(); renderTimer();
+  });
+
+  /* ---------- caffeine ---------- */
+  function renderCaffeine() {
+    var tea = currentTea();
+    var cupMl = parseInt(els.cup.value, 10) || 237;
+    var html = '';
+    if (state.mode === 'western') {
+      var mg = L.caffeineForCup(tea, cupMl);
+      html = '<div class="font-display text-3xl font-bold" style="color:var(--gold)">~' + mg + ' mg</div>' +
+        '<div class="mt-1" style="color:var(--muted)">per ' + cupMl + ' ml cup · <span class="chip chip-gold">' + L.caffeineLevel(mg) + '</span></div>';
+    } else {
+      var total = L.sessionCaffeineMg(tea, tea.maxInfusions, cupMl);
+      var first = L.caffeineForCup(tea, cupMl);
+      html = '<div class="font-display text-3xl font-bold" style="color:var(--gold)">~' + total + ' mg</div>' +
+        '<div class="mt-1" style="color:var(--muted)">across ' + tea.maxInfusions + ' infusions · first cup ~' + first + ' mg · ' +
+        '<span class="chip chip-gold">' + L.caffeineLevel(total) + '</span></div>';
+    }
+    els.caffeineOut.innerHTML = html;
+  }
+  els.cup.addEventListener('change', renderCaffeine);
+
+  /* ---------- boil-then-wait ---------- */
+  els.waitBtn.addEventListener('click', function () {
+    var target = parseFloat(els.waitTarget.value);
+    var res = L.boilWaitMinutes(target, { vessel: els.waitVessel.value });
+    if (res === null) {
+      els.waitOut.textContent = isNaN(target)
+        ? 'Enter a target temperature first.'
+        : 'That target is at or below room temperature — cooling alone cannot reach it. Use cooler water or ice.';
+    } else if (res.minutes === 0 && res.seconds === 0) {
+      els.waitOut.textContent = 'No wait needed — pour straight from the boil.';
+    } else {
+      var label = els.waitVessel.options[els.waitVessel.selectedIndex].text;
+      els.waitOut.textContent = 'Wait about ' +
+        (res.minutes > 0 ? res.minutes + ' min ' : '') + res.seconds + ' sec (' + label + ').';
+    }
+  });
+
+  /* ---------- session log (localStorage) ---------- */
+  function readLog() {
+    try {
+      var raw = localStorage.getItem(LOG_KEY);
+      var arr = JSON.parse(raw || '[]');
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+  function writeLog(arr) {
+    try { localStorage.setItem(LOG_KEY, JSON.stringify(arr.slice(0, 50))); } catch (e) { /* storage full */ }
+  }
+  function renderLog() {
+    var log = readLog();
+    els.logList.innerHTML = '';
+    if (!log.length) {
+      var p = document.createElement('p');
+      p.className = 'text-sm'; p.style.color = 'var(--muted)';
+      p.textContent = 'No infusions logged yet. Brew a round and tap "Log infusion & advance".';
+      els.logList.appendChild(p); return;
+    }
+    log.slice().reverse().forEach(function (e) {
+      var d = document.createElement('div'); d.className = 'log-entry';
+      var t = document.createElement('div'); t.className = 'text-sm font-semibold';
+      t.style.color = 'var(--ink)';
+      t.textContent = e.teaName + ' — infusion ' + e.infusion + ' (' + L.formatDuration(e.seconds) + ')';
+      var n = document.createElement('div'); n.className = 'text-xs mt-0.5'; n.style.color = 'var(--muted)';
+      n.textContent = (e.notes ? e.notes + ' · ' : '') + new Date(e.at).toLocaleString();
+      d.appendChild(t); d.appendChild(n);
+      els.logList.appendChild(d);
+    });
+  }
+  els.logBtn.addEventListener('click', function () {
+    var tea = currentTea();
+    var entry = L.buildLogEntry(tea, state.infusion, steepSecondsFor(tea), els.noteInput.value);
+    var log = readLog();
+    log.push(entry);
+    writeLog(log);
+    els.noteInput.value = '';
+    if (state.mode === 'gongfu') {
+      if (state.infusion < tea.maxInfusions) {
+        state.infusion++;
+        stopTimer();
+        state.total = state.remaining = steepSecondsFor(tea);
+        renderPlan(); renderTimer(); renderCaffeine();
+      } else {
+        els.label.textContent = 'Session complete — enjoy!';
+        renderPlan(); renderTimer();
+      }
+    }
+    renderLog();
+  });
+  els.clearLog.addEventListener('click', function () {
+    writeLog([]); renderLog();
+  });
+
+  /* ---------- init ---------- */
+  els.search.addEventListener('input', renderGrid);
+  els.category.addEventListener('change', renderGrid);
+  renderTeaInfo(); renderPlan(); renderCaffeine(); renderTimer(); renderGrid(); renderLog();
+})();
+</script>
+</body>
+</html>
